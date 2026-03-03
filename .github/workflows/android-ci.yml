@@ -1,0 +1,165 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+# NDK that is pre-installed on ubuntu-latest runners (avoids slow sdkmanager download)
+env:
+  NDK_VERSION: 28.2.13676358
+
+jobs:
+  # ── Build native .so per ABI ──────────────────────────────────────────────
+  build-native:
+    name: Build native lib (${{ matrix.abi }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [armeabi-v7a, arm64-v8a, x86, x86_64]
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Accept Android SDK licenses
+        # $ANDROID_HOME is a shell env var pre-set on ubuntu-latest; never use
+        # ${{ env.ANDROID_HOME }} (that reads the GHA env-context, which is empty).
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+
+      - name: Configure CMake (${{ matrix.abi }})
+        run: |
+          cmake -S app/src/main/cpp \
+                -B build/${{ matrix.abi }} \
+                -DCMAKE_TOOLCHAIN_FILE=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}/build/cmake/android.toolchain.cmake \
+                -DANDROID_NDK=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }} \
+                -DANDROID_ABI=${{ matrix.abi }} \
+                -DANDROID_PLATFORM=android-21 \
+                -DANDROID_STL=c++_shared \
+                -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build native library (${{ matrix.abi }})
+        run: cmake --build build/${{ matrix.abi }} -- -j$(nproc)
+
+      - name: Collect .so artifact
+        run: |
+          mkdir -p artifacts
+          find build/${{ matrix.abi }} -name "libimgui_demo.so" -exec cp {} artifacts/ \;
+          ls -lh artifacts/
+
+      - name: Upload native libs (${{ matrix.abi }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-libs-${{ matrix.abi }}
+          path: artifacts/libimgui_demo.so
+          if-no-files-found: error
+
+  # ── Build debug APK (fat: all ABIs) ───────────────────────────────────────
+  build-apk:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: build-native
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Accept Android SDK licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+
+      - name: Write local.properties
+        # platforms;android-34, build-tools;34.0.0 and ndk;$NDK_VERSION are
+        # pre-installed on ubuntu-latest – no sdkmanager download needed.
+        run: |
+          echo "sdk.dir=$ANDROID_HOME"                           > local.properties
+          echo "ndk.dir=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> local.properties
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  # ── Run on emulator & capture ImGui screenshot ────────────────────────────
+  emulator-screenshot:
+    name: Capture ImGui screenshot on emulator
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: build-apk
+
+    steps:
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Accept Android SDK licenses & install emulator
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+            "emulator" \
+            "system-images;android-34;default;x86_64"
+
+      - name: Download debug APK
+        uses: actions/download-artifact@v4
+        with:
+          name: debug-apk
+          path: .
+
+      - name: Run app on emulator and capture ImGui screenshot
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: default
+          avd-name: imgui_avd
+          # swiftshader_indirect = software GLES3 (no host GPU needed in CI)
+          emulator-options: -no-snapshot-save -no-audio -no-boot-anim -gpu swiftshader_indirect
+          disable-animations: true
+          script: |
+            adb install -r app-debug.apk
+            # Launch NativeActivity and give EGL + ImGui time to initialise
+            adb shell am start -W -n com.example.imguiandroid/android.app.NativeActivity || true
+            sleep 18
+            adb shell screencap -p /sdcard/imgui_screenshot.png
+            adb pull /sdcard/imgui_screenshot.png imgui-screenshot.png
+            ls -lh imgui-screenshot.png
+
+      - name: Upload ImGui screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: imgui-screenshot
+          path: imgui-screenshot.png
+          if-no-files-found: warn

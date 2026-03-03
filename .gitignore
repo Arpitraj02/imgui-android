@@ -1,0 +1,35 @@
+# Android/Gradle
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.ap_
+*.dex
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+*.aar
+
+# Native build artifacts
+*.so
+*.o
+*.a
+
+# CMake build dirs
+cmake-build-*/
+
+# Generated sources
+gen/
+
+# Keystore (never commit real keys)
+*.jks
+*.keystore
+
+# Logs
+*.log
