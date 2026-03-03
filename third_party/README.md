@@ -1,3 +1,6 @@
 # This directory contains third-party dependencies.
-# Run: git submodule update --init --recursive
-# to populate third_party/imgui (Dear ImGui from ocornut/imgui)
+#
+# third_party/imgui  – Dear ImGui (ocornut/imgui, docking branch)
+#
+# The submodule is tracked in .gitmodules; after cloning run:
+#   git submodule update --init --recursive
