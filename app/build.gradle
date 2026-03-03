@@ -11,6 +11,9 @@ android {
         versionCode 1
         versionName "1.0"
 
+        // NDK version pre-installed on GitHub Actions ubuntu-latest runners
+        ndkVersion "28.2.13676358"
+
         externalNativeBuild {
             cmake {
                 cppFlags "-std=c++17"
@@ -26,7 +29,7 @@ android {
     externalNativeBuild {
         cmake {
             path "src/main/cpp/CMakeLists.txt"
-            version "3.22.1"
+            // No version pin: Gradle picks the highest CMake available in the SDK
         }
     }
 
